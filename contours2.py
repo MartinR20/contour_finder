@@ -257,7 +257,7 @@ def preprocess(inp):
 if __name__ == '__main__':
 
    if len(sys.argv) < 2:
-      print("usage: python main.py video1.tiff video2.tiff ...")
+      print("usage: python contours2.py video1.tiff video2.tiff ...")
       exit(0)
 
    frame_counter = 0 
