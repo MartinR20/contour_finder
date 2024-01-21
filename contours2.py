@@ -6,30 +6,26 @@ from scipy.ndimage import gaussian_filter1d, gaussian_filter, distance_transform
 import matplotlib.pyplot as plt
 import hickle as hkl
 from common import *
-import tifffile
 from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
+import math
 
 def preprocessFrame(image):
+   w,h = image.shape[:2]
+   k = max(w,h)
+   k = int(math.log2(k))
+   k -= 1-k%2
+
    image = (image/image.max() * 255).astype(np.uint8)
-   image = cv2.blur(image, (9,9))
+   image = cv2.blur(image, (k,k))
  
-   gray = cv2.equalizeHist(image)
+   gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+   gray = cv2.equalizeHist(gray)
    image = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
 
-   grad = cv2.Laplacian(gray, cv2.CV_16S, ksize=9)
+   grad = cv2.Laplacian(gray, cv2.CV_16S, ksize=k)
 
    return image, grad
-
-def mergeZStacks(image_set):
-   weights = np.arange(-0.5,0.5,1/image_set.shape[0])
-   weights = norm.pdf(weights, 0, 0.1)
-   weights /= weights.sum()
-   weights = weights[:, np.newaxis, np.newaxis, np.newaxis]
-
-   views = np.sum(image_set*weights, axis=0)
-
-   return (views[0], views[1])
 
 def drawFeatures(image, features, color, ids=None):
    for i,p in enumerate(features.reshape(-1,2)):
@@ -68,17 +64,16 @@ class Frames:
       zeros = np.zeros((ref_shape[0], ref_shape[1], 1))
 
       print("estimate flow")
-      for current_frame, next_frame in tqdm(zip(self.frames[:-1],self.frames[1:])):
+      for current_frame, next_frame in tqdm(zip(self.frames[:-1],self.frames[1:]), total=len(self.frames)-1):
          next_frame.nuclei_flow   = self._estimateFlow(current_frame.nuclei,   next_frame.nuclei)
-         next_frame.membrane_flow = self._estimateFlow(current_frame.membrane, next_frame.membrane)
 
-   def adjustFrames(self, direction):
+   def adjustFrames(self):
       print("transform frames to motionless state")
 
       adjust = self.frames[1:]
       flows = [a.nuclei_flow for a in adjust]
 
-      for i,frame in tqdm(enumerate(adjust)):
+      for i,frame in tqdm(enumerate(adjust), total=len(adjust)):
          nflow = flows[:(i+1)][::-1]
 
          for j,flow in enumerate(nflow):
@@ -86,36 +81,19 @@ class Frames:
             h, w = flow.shape[:2]
             x, y = np.meshgrid(np.arange(w), np.arange(h))
 
-            remapped_x = (x - direction*flow[...,0]).astype(np.float32)
-            remapped_y = (y - direction*flow[...,1]).astype(np.float32)
+            remapped_x = (x + flow[...,0]).astype(np.float32)
+            remapped_y = (y + flow[...,1]).astype(np.float32)
 
             frame.nuclei        = cv2.remap(frame.nuclei,        remapped_x, remapped_y, interpolation=cv2.INTER_LINEAR)
             frame.nuclei_grad   = cv2.remap(frame.nuclei_grad,   remapped_x, remapped_y, interpolation=cv2.INTER_LINEAR)
 
-      adjust = self.frames[1:]
-      flows = [a.membrane_flow for a in adjust]
-
-      for i,frame in tqdm(enumerate(adjust)):
-         nflow = flows[:(i+1)][::-1]
-
-         for j,flow in enumerate(nflow):
-
-            h, w = flow.shape[:2]
-            x, y = np.meshgrid(np.arange(w), np.arange(h))
-
-            remapped_x = (x - direction*flow[...,0]).astype(np.float32)
-            remapped_y = (y - direction*flow[...,1]).astype(np.float32)
-
-            frame.membrane      = cv2.remap(frame.membrane,      remapped_x, remapped_y, interpolation=cv2.INTER_LINEAR)
-            frame.membrane_grad = cv2.remap(frame.membrane_grad, remapped_x, remapped_y, interpolation=cv2.INTER_LINEAR)
-
-   def adjustContours(self, direction):
+   def adjustContours(self):
       print("transform frames back")
 
       adjust = self.frames[1:]
       flows = [a.nuclei_flow for a in adjust]
 
-      for i,frame in tqdm(enumerate(adjust)):
+      for i,frame in tqdm(enumerate(adjust), total=len(adjust)-1):
          nflow = flows[:(i+1)]
          frame.contours = self.frames[0].contours.copy()
          frame.ids      = self.frames[0].ids.copy()
@@ -125,8 +103,8 @@ class Frames:
             h, w = flow.shape[:2]
             x, y = np.meshgrid(np.arange(w), np.arange(h))
 
-            remapped_x = (x - direction*flow[...,0]).astype(np.float32)
-            remapped_y = (y - direction*flow[...,1]).astype(np.float32)
+            remapped_x = (x + flow[...,0]).astype(np.float32)
+            remapped_y = (y + flow[...,1]).astype(np.float32)
             remapped = np.dstack([remapped_x, remapped_y])
 
             for i,contour in enumerate(frame.contours):
@@ -146,25 +124,17 @@ class Frames:
       for frame in self.frames:
          setattr(frame, field, fields)
 
-   def combineMasks(self, image_1, image_2):
-      d1 = distance_transform_edt(image_1) - distance_transform_edt(~image_1)
-      d2 = distance_transform_edt(image_2) - distance_transform_edt(~image_2)
-      out = (d1 + d2)
-      
-      _, thresh = cv2.threshold(out, 7, 255, cv2.THRESH_BINARY)
-      return thresh
-
    def extractContours(self):
       frame = self.frames[0]
       kernel = np.ones((3,3),np.uint8)
 
       gray = cv2.cvtColor(np.uint8(frame.nuclei), cv2.COLOR_BGR2GRAY)
-      _, thresh = cv2.threshold(gray, 80, 255, 0)
+      mu = np.mean(gray)
+      _, thresh = cv2.threshold(gray, mu, 255, 0)
       sure_bg = cv2.morphologyEx(thresh,cv2.MORPH_DILATE,kernel,iterations=2)
 
       grad = np.uint8(frame.nuclei_grad < 0)*255
       sure_fg = cv2.morphologyEx(grad,cv2.MORPH_ERODE,kernel,iterations=2)
-      #sure_fg = np.uint8(self.combineMasks((frame.nuclei_grad < 0), (frame.membrane_grad > 0)))*255
 
       unknown = cv2.subtract(sure_bg,sure_fg)
 
@@ -247,11 +217,9 @@ def preprocess(inp):
    # set debug roi
    #image_set = image_set[:,:,0:400,0:400]
 
-   nuclei, membranes       = mergeZStacks(image_set)
-   nuclei, nuclei_grad     = preprocessFrame(nuclei)
-   membrane, membrane_grad = preprocessFrame(membranes)
+   nuclei, nuclei_grad     = preprocessFrame(image_set)
 
-   return Frame(nuclei, nuclei_grad, membrane, membrane_grad)
+   return Frame(nuclei, nuclei_grad, None, None)
 
 
 if __name__ == '__main__':
@@ -262,31 +230,47 @@ if __name__ == '__main__':
 
    frame_counter = 0 
    frames = Frames()
-   all_contours = []
-   pool = Pool(cpu_count()//2) if threading else Pool(1)
+   pool = Pool(cpu_count()) if threading else Pool(1)
 
    # ----------------- preprocess data -----------------------------
-   for arg in sys.argv[1:]:   
-      print(f"processing file: {arg}")
+   print(f"preprocessing files: {sys.argv[1:]}")
 
-      cap = tifffile.TiffFile(arg).asarray()
+   for arg in tqdm(sys.argv[1:]):   
+   
+      read = []
 
-      print(f"frames to process: {cap.shape[0]}")
-      result = pool.map(preprocess, zip(cap, [i for i in range(frame_counter,frame_counter+len(cap))]))
+      cap = cv2.VideoCapture(arg)
+      
+      if not cap.isOpened():
+         print("Error: Could not open video.")
+         exit(1)
+      
+      while cap.isOpened():
+         ret, frame = cap.read()
+          
+         if ret:
+            read.append(frame)              
+         else:
+            break
+      
+      cap.release()
+
+
+      result = pool.map(preprocess, zip(read, [i for i in range(frame_counter,frame_counter+len(read))]))
 
       for frame in result:
          if frame != None:
             frames.append(frame)
 
-      frame_counter += len(cap)
+      frame_counter += len(read)
+
 
    frames.estimateFlow()
-   frames.adjustFrames(-1.0)
+   frames.adjustFrames()
    frames.averageField("nuclei_grad")
-   frames.averageField("membrane_grad")
    frames.averageField("nuclei")
    frames.extractContours()
-   frames.adjustContours(-1.0)
+   frames.adjustContours()
    frames.exportVideo("test_export.avi")
    frames.exportContours("contours.hkl")
 
