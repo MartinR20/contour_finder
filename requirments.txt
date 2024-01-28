@@ -2,6 +2,6 @@ numpy
 opencv-python
 scipy
 matplotlib
-hickle
+pandas
 tifffile
 tqdm

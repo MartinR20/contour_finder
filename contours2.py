@@ -4,11 +4,12 @@ import cv2
 from scipy.stats import norm
 from scipy.ndimage import gaussian_filter1d, gaussian_filter, distance_transform_edt
 import matplotlib.pyplot as plt
-import hickle as hkl
 from common import *
 from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
 import math
+import pandas as pd
+import argparse
 
 def preprocessFrame(image):
    w,h = image.shape[:2]
@@ -201,8 +202,58 @@ class Frames:
       
       out.release()
 
-   def exportContours(self, path):
-      hkl.dump(self.frames, path)
+   def exportContours(self, file_path, meta_path):
+      di = {
+         "frame_id":    np.array([], dtype=np.int32),
+         "contour_id":  np.array([], dtype=np.int32),
+         "x[px]":           np.array([], dtype=np.int32),
+         "y[px]":           np.array([], dtype=np.int32)
+      }
+
+      meta = {
+         "frame_id":     [],
+         "contour_id":   [],
+         "center_x[px]": [],
+         "center_y[px]": [],
+         "area[mu^2]":   [],
+         "vx[mu/s]":     [],
+         "vy[mu/s]":     []
+      }
+
+      for frame_id,frame in enumerate(self.frames):
+         for contour_id,contour in enumerate(frame.contours):
+            di["frame_id"]   = np.hstack([di["frame_id"],   np.full(len(contour), frame_id)])
+            di["contour_id"] = np.hstack([di["contour_id"], np.full(len(contour), contour_id)])
+            di["x[px]"]      = np.hstack([di["x[px]"],      contour[:,0]])
+            di["y[px]"]      = np.hstack([di["y[px]"],      contour[:,1]])
+
+            centroid = polygonCentroid(contour)
+
+            meta["frame_id"].append(frame_id)
+            meta["contour_id"].append(contour_id)
+            meta["center_x[px]"].append(centroid[0])
+            meta["center_y[px]"].append(centroid[1])
+            contour_ = np.copy(contour)
+            contour_[:,0] = contour_[:,0] * x_res
+            contour_[:,1] = contour_[:,1] * y_res
+            meta["area[mu^2]"].append(polygonArea(contour_))
+
+            if frame_id != 0:
+               flow = frame.nuclei_flow
+               mask = np.zeros(flow.shape[:2], dtype=np.uint8)
+               cv2.drawContours(mask, [np.array(contour)], 0, 255, thickness=cv2.FILLED)
+               v = np.mean(flow[mask == 255], axis=0)
+
+               meta["vx[mu/s]"].append(v[0]*x_res / t_res)
+               meta["vy[mu/s]"].append(v[1]*y_res / t_res)
+            else:
+               meta["vx[mu/s]"].append(0)
+               meta["vy[mu/s]"].append(0)
+
+      df = pd.DataFrame(di)
+      df.to_csv(file_path, index=False)  
+      df = pd.DataFrame(meta)
+      df.to_csv(meta_path, index=False)  
 
 def preprocess(inp):
    image_set     = inp[0]
@@ -224,18 +275,42 @@ def preprocess(inp):
 
 if __name__ == '__main__':
 
-   if len(sys.argv) < 2:
-      print("usage: python contours2.py video1.tiff video2.tiff ...")
-      exit(0)
+   parser = argparse.ArgumentParser(description="Contour finder for nuclei images using optical flow")
+   
+   parser.add_argument('videos', nargs='+', type=str,                      help='list of videos to process')
+   parser.add_argument('--x_res',           type=float,  default=0.214198, help='resolution in x direction [mu/px]')
+   parser.add_argument('--y_res',           type=float,  default=0.152812, help='resolution in y direction [mu/px]')
+   parser.add_argument('--t_res',           type=float,  default=60,       help='resolution in time [s]')
+   parser.add_argument('--cell_diag_min',   type=float,  default=3,        help='minimum expected cell diagonal [mu]')
+
+   args = parser.parse_args()
+
+   if not hasattr(args, 'videos') or args.videos is None or args.videos is []:
+       print("Error: Missing required argument videos")
+       parser.print_help()
+       exit(1)
+
+   videos = args.videos
+
+   global x_res, y_res, t_res, cell_diag_min, cell_diag_max, polygon_min_area, polygon_max_area
+   x_res = args.x_res 
+   y_res = args.y_res 
+   
+   cell_diag_min = args.cell_diag_min 
+   cell_diag_max = 10 #unused
+   
+   polygon_min_area = (cell_diag_min / max(x_res,y_res))**2
+   polygon_max_area = (cell_diag_max / max(x_res,y_res))**2
+
 
    frame_counter = 0 
    frames = Frames()
    pool = Pool(cpu_count()) if threading else Pool(1)
 
    # ----------------- preprocess data -----------------------------
-   print(f"preprocessing files: {sys.argv[1:]}")
+   print(f"preprocessing files: {videos}")
 
-   for arg in tqdm(sys.argv[1:]):   
+   for arg in tqdm(videos):   
    
       read = []
 
@@ -272,5 +347,5 @@ if __name__ == '__main__':
    frames.extractContours()
    frames.adjustContours()
    frames.exportVideo("test_export.avi")
-   frames.exportContours("contours.hkl")
+   frames.exportContours("contours.csv", "metadata.csv")
 

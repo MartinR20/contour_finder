@@ -15,6 +15,7 @@ frame_end = np.inf
 
 x_res = 0.214198 # um
 y_res = 0.152812 # um
+t_res = 60
 
 cell_diag_min = 3
 cell_diag_max = 10
