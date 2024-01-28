@@ -36,3 +36,23 @@ optional arguments:
   --cell_diag_min CELL_DIAG_MIN
                         minimum expected cell diagonal [mu]
 ```
+
+# Result
+
+The contours2 script will export three files:
+1. A video file showing the input video with amrked contours and nuclei ids
+2. A contours.csv with the columns:
+  - frame_id: Zero based frame number describing which frame the contour belongs to
+  - contour_id: Zero based contour id uniquely identifing a contour in a frame
+  - x[px]: x position of a contour point in pixels
+  - y[px]: y position of a contour point in pixels
+3. A metadata.csv with the columns:
+  - frame_id: Zero based frame number describing which frame the contour belongs to
+  - contour_id: Zero based contour id uniquely identifing a contour in a frame
+  - center_x[px]: x position of the contours center of mass in pixels
+  - center_y[px]: y position of the contours center of mass in pixels
+  - area[mu^2]: area of the contour in mu^2
+  - vx[mu/s]: averaged optical flow in x direction over all the pixels inside the contour in mu/s
+  - vy[mu/s]: averaged optical flow in y direction over all the pixels inside the contour in mu/s
+
+
