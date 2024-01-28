@@ -35,4 +35,4 @@ optional arguments:
   --t_res T_RES         resolution in time [s]
   --cell_diag_min CELL_DIAG_MIN
                         minimum expected cell diagonal [mu]
-```{bash}
+```
