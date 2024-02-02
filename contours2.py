@@ -1,4 +1,5 @@
 import sys
+import os
 import numpy as np
 import cv2
 from scipy.stats import norm
@@ -282,6 +283,7 @@ if __name__ == '__main__':
    parser.add_argument('--y_res',           type=float,  default=0.152812, help='resolution in y direction [mu/px]')
    parser.add_argument('--t_res',           type=float,  default=60,       help='resolution in time [s]')
    parser.add_argument('--cell_diag_min',   type=float,  default=3,        help='minimum expected cell diagonal [mu]')
+   parser.add_argument('--output',          type=str,    default="",       help='output name prefix of the result files')
 
    args = parser.parse_args()
 
@@ -302,6 +304,10 @@ if __name__ == '__main__':
    polygon_min_area = (cell_diag_min / max(x_res,y_res))**2
    polygon_max_area = (cell_diag_max / max(x_res,y_res))**2
 
+   output_name = args.output
+
+   if output_name == "":
+      output_name, _ = os.path.splitext(videos[0])
 
    frame_counter = 0 
    frames = Frames()
@@ -346,6 +352,6 @@ if __name__ == '__main__':
    frames.averageField("nuclei")
    frames.extractContours()
    frames.adjustContours()
-   frames.exportVideo("test_export.avi")
-   frames.exportContours("contours.csv", "metadata.csv")
+   frames.exportVideo(output_name + "_contour_movie.avi")
+   frames.exportContours(output_name + "_contours.csv", output_name + "_metadata.csv")
 
